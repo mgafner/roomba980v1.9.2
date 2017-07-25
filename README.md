@@ -23,4 +23,5 @@ curl --insecure -X POST -H "Content-Type: application/json" -H "Authorization: B
 
 # command to start the irobot:
 auth_header=$(echo -n user:$PASSWORD | base64)
+
 curl --insecure -X POST -H "Content-Type: application/json" -H "Authorization: Basic $auth_header" -d '{"do":"set","args":["cmd" {"op":"start"}],"id":3}' https://$HOST/umi
