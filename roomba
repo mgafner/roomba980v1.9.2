@@ -1,0 +1,309 @@
+#!/bin/bash
+#
+# This file is part of roomba980v1.9.2
+# https://github.com/mgafner/roomba980v1.9.2
+#
+# roomba980v1.9.2 is free software: you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation, either version 3 of the License, or
+# (at your option) any later version.
+#
+# roomba980v1.9.2 is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with roomba980v1.9.2.  If not, see <http://www.gnu.org/licenses/>.
+
+VERSION=0.1
+
+# array of used commands in this script
+COMMANDS="base64 curl getopt sed"
+
+# intern constants
+BASENAME=$(basename "$0")
+HOST=""
+PASSWORD=""
+
+# check if commands are available
+# ...  todo
+
+check_host_pass()
+{
+  if [[ -z $HOST ]]; then
+    echo "needs saved hostname/ipaddress or option --host=<hostname/ipaddress>"
+    exit 1
+  fi
+  if [[ -z $PASSWORD ]]; then
+    echo "needs saved password or option --password=<password>"
+    exit 1
+  fi
+}
+
+get_password()
+{ 
+  echo "Place the robot on the home base and press the HOME button for about 2 seconds until a series of tones is played and the WIFI light flashes, then come back and press a key to continue"
+  read -n1 -s
+  echo "connecting..."
+  # turn of SSL-validation with parameter --insecure:
+  answer=$(curl --insecure --silent -X POST -H "Content-Type: application/json" -d '{"do":"get","args":["passwd"],"id":1}' https://$HOST/umi)
+  #testing: answer='{"ok":{"passwd":"ouMNGS7Lxk1UR7kP"},"id":1}'
+  if [[ -z "$answer" ]]; then
+    #echo "curl feedback: $?"
+    echo "no answer from $HOST"
+  else
+    echo "$answer"
+    PASSWORD=$(echo "$answer" | sed -e 's/.*passwd\":\"//g' -e 's/\".*//g')
+    config_write password $PASSWORD
+  fi
+}
+
+get_blid()
+{
+  auth_header=$(echo -n user:$PASSWORD | base64) 
+  answer=$(curl --insecure --silent -X POST -H "Content-Type: application/json" -H "Authorization: Basic $auth_header" -d '{"do":"get","args":["sys"],"id":2}' https://$HOST/umi)
+  if [[ "$answer"=="" ]]; then
+    #echo "curl feedback: $?"
+    echo "no answer from $HOST"
+  else
+    echo "$answer"
+  fi
+}
+
+config_write()
+# $1 = config parameter to save
+# $2 = setting to save
+{
+  case "$1" in
+  password)
+    echo "Do you agree to write the password in cleartext to the file ~/.roomba in your home directory? [y/N]"
+    read -n1 -s answer
+    if [[ "$answer" != "y" && "$answer" != "Y" ]]; then
+      return
+    else
+      config="PASSWORD"
+      setting=$2
+    fi
+  ;;
+  host)
+    config="HOST"
+    setting=$2
+  ;;
+  *)
+    return
+  ;;
+  esac
+
+  if [[ -f ~/.roomba ]]; then
+    checkconfig=$(grep "$config" ~/.roomba)
+  else
+    checkconfig=""
+  fi
+  if [[ -z "$checkconfig" ]]; then
+    echo "writing new config..."
+    echo "$config=$setting" >> ~/.roomba
+  else
+    echo "updating config..."
+    sed -i "s/^\($config\s*=\s*\).*$/\1$setting/" ~/.roomba
+  fi  
+}
+
+config_read()
+{
+if [[ -f ~/.roomba ]]; then
+  while read line; do
+    if [[ "$line" =~ ^[^#]*= ]]; then
+      config=${line%%=*}
+      setting=${line#*=}
+      declare -g "$config=$setting"
+    fi
+  done < ~/.roomba
+fi
+}
+
+send_command()
+{
+  check_host_pass
+  auth_header=$(echo -n user:$PASSWORD | base64) 
+  case "$1" in
+  dock)
+    curl --insecure -X POST -H "Content-Type: application/json" -H "Authorization: Basic $auth_header" -d '{"do":"set","args":["cmd" {"op":"dock"}],"id":7}' https://$HOST/umi
+  ;;
+  pause)
+    curl --insecure -X POST -H "Content-Type: application/json" -H "Authorization: Basic $auth_header" -d '{"do":"set","args":["cmd" {"op":"pause"}],"id":4}' https://$HOST/umi
+  ;;
+  resume)
+    curl --insecure -X POST -H "Content-Type: application/json" -H "Authorization: Basic $auth_header" -d '{"do":"set","args":["cmd" {"op":"resume"}],"id":5}' https://$HOST/umi
+  ;;
+  start)
+    curl --insecure -X POST -H "Content-Type: application/json" -H "Authorization: Basic $auth_header" -d '{"do":"set","args":["cmd" {"op":"start"}],"id":3}' https://$HOST/umi
+  ;;
+  stop)
+    curl --insecure -X POST -H "Content-Type: application/json" -H "Authorization: Basic $auth_header" -d '{"do":"set","args":["cmd" {"op":"stop"}],"id":6}' https://$HOST/umi
+  ;;
+  esac 
+}
+
+usage()
+{
+version
+more << EOF
+
+USAGE: 
+  $BASENAME --host=<HOSTNAME-OR-IP>   save hostname-or-ip
+  $BASENAME --get-password            get initial password from roomba (needs --host or saved hostname)
+  $BASENAME --get-blid                get the BLID from roomba (needs --host or saved hostname)
+
+OPTIONS:
+  --dock
+  --get-blid
+  --get-password
+  -h, --help                display this help
+  --host
+  --password
+  --pause
+  --resume
+  --start
+  --stop
+  -V, --version             display version information
+
+Report bugs as issue on github:
+<https://github.com/mgafner/roomba980v1.9.2>
+EOF
+return 0
+}
+
+version()
+{
+  echo "$BASENAME v$VERSION"
+}
+
+config_read
+
+# getopt long
+#
+# for optional arguments add "::"
+# for required arguments add ":"
+# for no arguments, just add nothing
+#
+# read the options
+options=`getopt -q -o hV --long dock,get-blid,get-password::,help,host::,password::,pause,resume,start,stop,version -n "$BASENAME" -- "$@"`
+# getopt  return  error  codes
+#  0 for successful parsing, 
+#  1 getopt(3) returns errors, 
+#  2 it does not understand its own parameters, 
+#  3 an internal error occurs like out-of-memory, 
+#  4 it is called with -T.
+
+case "$?" in
+  1)
+    echo "something went wrong, maybe not the correct options?"
+    usage
+    exit 1
+    ;;
+  2)
+    echo "something went wrong with getopts, tell it to the author"
+    exit 1
+    ;;
+  3)
+    echo "something went wrong, maybe out of memory?"
+    exit 1
+    ;;
+esac
+
+eval set -- "$options"
+
+# extract options and their arguments into variables.
+while true ; do
+  case "$1" in
+    --dock)
+        send_command dock
+        exit 0
+      ;;
+    --get-blid)
+      check_host_pass
+      get_blid
+      exit 0
+      ;;
+    --get-password)
+      case "$2" in
+        "")
+          if [[ ! -z $HOST ]]; then
+            get_password
+            exit 0
+          else
+            echo "needs hostname or ipaddress of your roomba as argument: --host=<hostname/ipaddress>"
+          fi
+          exit 1
+        ;;
+        *)
+          HOST=$2
+          shift 2
+          get_password
+          exit 0
+        ;;
+      esac
+      ;;
+    -h|--help)
+      usage
+      exit 0
+      ;;
+    --host)
+      case "$2" in
+        "")
+          echo "needs hostname or ipaddress of your roomba as argument: --host=<hostname/ipaddress>"
+          exit 1
+        ;;
+        *)
+          HOST=$2
+          config_write host $HOST
+          shift 2
+        ;;   
+      esac
+      ;;
+    --password)
+      case "$2" in
+        "")
+          echo "needs password of your roomba as argument: --password=<password>"
+          echo "as example as given from $BASENAME --host=192.168.1.100 --get-password"
+          exit 1
+        ;;
+        *)
+          PASSWORD=$2
+          shift 2
+        ;;   
+      esac
+      ;;
+    --pause)
+        send_command pause
+        exit 0
+      ;;
+    --resume)
+        send_command resume
+        exit 0
+      ;;
+    --start)
+        send_command start
+        exit 0
+      ;;
+    --stop)
+        send_command stop
+        exit 0
+      ;;
+    -V|--version)
+      version
+      exit 0
+      ;;
+    \?)
+      usage
+      exit 1
+      ;;
+    :)
+      exit 1
+      ;;
+    --) shift ; break ;;
+    *)  echo "Internal error!" ; exit 1 ;;
+  esac
+done
+
